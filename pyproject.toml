@@ -12,6 +12,7 @@ dependencies = [
     "matplotlib>=3.11.2",
     "open3d>=0.20.0",
     "pypatchworkpp>=1.4.1",
+    "scipy>=1.17.1",
 ]
 
 [project.scripts]
