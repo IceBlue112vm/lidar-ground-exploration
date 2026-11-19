@@ -1,7 +1,7 @@
 [project]
-name = "pointcloud-lab"
+name = "lidar-ground-exploration"
 version = "0.1.0"
-description = "Add your description here"
+description = "Experimental LiDAR ground exploration using RANSAC, Patchwork++, and recursive virtual sensor placement"
 readme = "README.md"
 authors = [
     { name = "IceBlue", email = "98395260+IceBlue112vm@users.noreply.github.com" }
