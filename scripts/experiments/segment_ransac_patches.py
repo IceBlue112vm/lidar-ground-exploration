@@ -1,7 +1,7 @@
 """Split RANSAC plane inliers into XY-connected surface patches.
 
 Usage:
-  uv run python scripts/segment_ransac_patches.py \
+  uv run python scripts/experiments/segment_ransac_patches.py \
       outputs/ransac_plane_001.las outputs/ransac_patches_05 \
       --cell-size 0.5 --min-points-per-cell 3 --min-area 10 --export-top 5
 

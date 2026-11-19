@@ -14,13 +14,13 @@ floor detector. Horizontal roofs and platforms can pass; review preview LAS
 files in CloudCompare before choosing an origin.
 
 Example:
-  uv run python scripts/recursive_ground_step1.py discover \
+  uv run python scripts/experiments/recursive_ground_step1.py discover \
     outputs/multi_origin_08/origin_01_ground.las \
     outputs/ransac_plane_001.las \
     outputs/virtual_origins_05/origins.csv \
     outputs/recursive_04_candidates
 
-  uv run python -u scripts/recursive_ground_step1.py run \
+  uv run python -u scripts/experiments/recursive_ground_step1.py run \
     data/SKV1.las \
     outputs/virtual_origins_05/origins.csv \
     outputs/recursive_04_candidates/origins.csv \

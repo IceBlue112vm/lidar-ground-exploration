@@ -13,7 +13,7 @@ Planar roofs, platforms, vegetation etc. may become seeds. Limits prevent
 unbounded propagation; they DO NOT establish complete ground coverage.
 
 First execution (example):
-  uv run python -u scripts/recursive_ground_explore.py \
+  uv run python -u scripts/experiments/recursive_ground_explore.py \
       data/SKV1.las outputs/virtual_origins_05/origins.csv \
       outputs/recursive_04_full \
       --root-count 8 \
@@ -21,7 +21,7 @@ First execution (example):
       --max-executions 64 --save-novel-every 4
 
 Resume without rerunning completed origins:
-  uv run python -u scripts/recursive_ground_explore.py \
+  uv run python -u scripts/experiments/recursive_ground_explore.py \
       data/SKV1.las outputs/virtual_origins_05/origins.csv \
       outputs/recursive_04_full --root-count 8 \
       --first-root-candidates outputs/recursive_04_candidates/origins.csv \

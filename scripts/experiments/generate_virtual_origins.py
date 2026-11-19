@@ -15,7 +15,7 @@ pass to patchworkpp_ground.py --origin-ground X Y Z; that script adds the
 sensor_height internally. Do NOT pass the sensor XYZ to --origin-ground.
 
 Example:
-  uv run python scripts/generate_virtual_origins.py \
+  uv run python scripts/experiments/generate_virtual_origins.py \
     outputs/ransac_plane_001.las outputs/virtual_origins_05 \
     --cell-size 0.5 --min-points-per-cell 3 --min-area 10 \
     --clearance 1.0 --min-spacing 10 --max-origins 8
