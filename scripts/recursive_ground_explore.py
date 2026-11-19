@@ -1,4 +1,4 @@
-"""Experiment 04 v2: best-first recursive ground exploration, without union.
+"""Experiment 04: recursive exploration of NEW Patchwork++ ground, without union.
 
 Requirements: laspy, numpy, scipy, pypatchworkpp, and the existing
 multi_origin_patchworkpp.py and recursive_ground_step1.py in this directory.
@@ -8,37 +8,24 @@ extract only Ground(child) \\ Ground(parent), discover locally supported 3-D
 patches in that DIFFERENCE, and enqueue new origins on those patches.
 No global Ground union is calculated, exported, or used to choose seeds.
 
-The method favors exploration, not final false-positive rejection.
-
-V2 updates (ONE bundled iteration):
-- Candidate scheduler: all eight root origins first, then dynamic best-first by
-  candidate patch footprint, clearance, 3D origin spacing, stacking, and depth.
-- Maintain spatial visitation using executed origin coordinates (NOT point-level
-  Ground union); discourage repeated visits to coarse XY+Z origin cells.
-- Increase minimum origin spacing to 8m and cap queued children per result at 6.
-- Log priority at execution for auditability.
-
-IMPORTANT: Priority is a geometric heuristic, not Ground probability. A roof or
-vegetation patch may still have high priority. Not guaranteed to beat FIFO.
-
 The method deliberately favors exploration, not false-positive rejection.
 Planar roofs, platforms, vegetation etc. may become seeds. Limits prevent
 unbounded propagation; they DO NOT establish complete ground coverage.
 
 First execution (example):
-  uv run python -u src/pointcloud_lab/recursive_ground_explore_v2.py \
+  uv run python -u scripts/recursive_ground_explore.py \
       data/SKV1.las outputs/virtual_origins_05/origins.csv \
       outputs/recursive_04_full \
       --root-count 8 \
       --first-root-candidates outputs/recursive_04_candidates/origins.csv \
-      --max-executions 64 --save-novel-every 8
+      --max-executions 64 --save-novel-every 4
 
 Resume without rerunning completed origins:
-  uv run python -u src/pointcloud_lab/recursive_ground_explore_v2.py \
+  uv run python -u scripts/recursive_ground_explore.py \
       data/SKV1.las outputs/virtual_origins_05/origins.csv \
       outputs/recursive_04_full --root-count 8 \
       --first-root-candidates outputs/recursive_04_candidates/origins.csv \
-      --max-executions 64 --save-novel-every 8 --resume
+      --max-executions 64 --save-novel-every 4 --resume
 """
 
 import argparse
@@ -62,12 +49,11 @@ from recursive_ground_step1 import (
 )
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 1
 FIELDS = [
     "id", "parent_id", "depth", "kind", "source_component", "origin_x", "origin_y",
     "origin_z", "ground_points", "new_vs_parent", "candidates_enqueued",
     "segmentation_seconds", "elapsed_seconds", "ground_mask_file",
-    "priority_at_selection", "area_m2_approx", "clearance_m_approx", "stacking_proxy",
 ]
 
 
@@ -263,7 +249,6 @@ def discover_seeds(ground_las, known_ground_xyz, args):
                 "approximate_x": float(center[0]),
                 "approximate_y": float(center[1]),
                 "approximate_z": float(center[2]),
-                "stacking_proxy": round(vertical_stacking, 4),
             }
             proposals.append(proposal)
             known.append(tuple(center))
@@ -281,7 +266,6 @@ def discover_seeds(ground_las, known_ground_xyz, args):
             "component_id": rec["component_id"],
             "area_m2_approx": rec["area_m2_approx"],
             "clearance_m_approx": rec["clearance_m_approx"],
-            "stacking_proxy": rec["stacking_proxy"],
         })
     return result, {"components": int(ncomps), "supported_voxels": int(supported), "input_points": n}
 
@@ -306,71 +290,18 @@ def enqueue(state, proposed, parent_id, parent_depth, kind, args):
             "kind": kind,
             "source_component": candidate.get("component_id", ""),
             "sensor": list(candidate["sensor"]),
-            "area_m2_approx": candidate.get("area_m2_approx", 0),
-            "clearance_m_approx": candidate.get("clearance_m_approx", 0),
-            "stacking_proxy": candidate.get("stacking_proxy", 1),
         })
         all_known.append(tuple(ground))
         added += 1
     return added
 
 
-
-def coarse_cell(ground, args):
-    """Coarse 3-D cell for ORIGIN visitation only (not a Ground union)."""
-    p = np.asarray(ground, dtype=np.float64)
-    widths = np.asarray([args.visited_xy_cell, args.visited_xy_cell, args.visited_z_cell])
-    return tuple(np.floor(p / widths).astype(np.int64).tolist())
-
-
-def candidate_priority(item, processed, args):
-    """Best-first priority, recomputed against current executed origin positions.
-
-    Root origins are always processed first, preserving the original root baseline.
-    Geometry is a heuristic; this does NOT classify Ground or suppress candidates.
-    """
-    if item["parent_id"] is None:
-        return float("inf")
-    area = max(0., float(item.get("area_m2_approx", 0.) or 0.))
-    clearance = max(0., float(item.get("clearance_m_approx", 0.) or 0.))
-    stacking = max(1., float(item.get("stacking_proxy", 1.) or 1.))
-    origin = np.asarray(item["sensor"], dtype=np.float64) - np.array([0., 0., args.sensor_height])
-    if processed:
-        known = np.asarray([(r["origin_x"], r["origin_y"], r["origin_z"] - args.sensor_height)
-                            for r in processed], dtype=np.float64)
-        nearest = float(np.min(np.linalg.norm(known - origin, axis=1)))
-        cell = coarse_cell(origin, args)
-        nearby = sum(coarse_cell(q, args) == cell for q in known)
-    else:
-        nearest = args.min_origin_distance
-        nearby = 0
-    # Area dominates. Distant origins are mildly rewarded, but are not blindly
-    # selected over spatially coherent ground-like candidates.
-    return (2.0 * np.log1p(area)
-            + 0.30 * min(clearance, 5.)
-            + 0.08 * min(nearest, 25.)
-            - 0.70 * max(0., stacking - 1.)
-            - 0.16 * int(item["depth"])
-            - 1.25 * nearby)
-
-
-def next_pending_index(state, args):
-    # Always run 8 original RANSAC seeds first.
-    for i, item in enumerate(state["pending"]):
-        if item["parent_id"] is None:
-            return i
-    return max(range(len(state["pending"])),
-               key=lambda i: (candidate_priority(state["pending"][i], state["processed"], args), -i))
-
 def parse_first_root_candidates(path):
     with path.open("r", newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
     return [{"sensor": [float(row[k]) for k in ("sensor_x", "sensor_y", "sensor_z")],
              "component_id": row.get("component_id", ""),
-             "ground": [float(row[k]) for k in ("ground_x", "ground_y", "ground_z")],
-             "area_m2_approx": float(row.get("area_m2_approx", 0) or 0),
-             "clearance_m_approx": float(row.get("clearance_m_approx", 0) or 0),
-             "stacking_proxy": float(row.get("vertical_stacking", 1) or 1)}
+             "ground": [float(row[k]) for k in ("ground_x", "ground_y", "ground_z")]}
             for row in rows]
 
 
@@ -387,8 +318,6 @@ def config_of(args, n):
         "max_stacking": args.max_stacking, "max_voxels": args.max_voxels,
         "min_origin_distance": args.min_origin_distance,
         "max_candidates_per_result": args.max_candidates_per_result,
-        "visited_xy_cell": args.visited_xy_cell, "visited_z_cell": args.visited_z_cell,
-        "scheduler": "best_first_v2",
         "max_seeds_per_patch": args.max_seeds_per_patch,
         "sensor_height": args.sensor_height, "min_range": args.min_range,
         "zone0_sectors": args.zone0_sectors,
@@ -436,9 +365,7 @@ def main(args):
     start = perf_counter()
     try:
         while state["pending"] and executions_this_run < args.max_executions:
-            pick = next_pending_index(state, args)
-            item = state["pending"][pick]
-            priority = candidate_priority(item, state["processed"], args)
+            item = state["pending"][0]
             parent_id = item["parent_id"]
             origin = item["sensor"]
             # Candidates may have become redundant after earlier branches ran.
@@ -448,14 +375,13 @@ def main(args):
                 point_ground = [origin[0], origin[1], origin[2] - args.sensor_height]
                 if not far_enough(point_ground, old_ground, args.min_origin_distance):
                     print(f"Skip queued origin near an already executed origin: {origin}", flush=True)
-                    state["pending"].pop(pick)
+                    state["pending"].pop(0)
                     save_reports(out, state, args.sensor_height)
                     continue
             current_id = state["next_id"]
             t0 = perf_counter()
             print(f"\n[{current_id:04d}] depth={item['depth']}, parent={parent_id}, "
-                  f"kind={item['kind']}, priority={priority if np.isfinite(priority) else 'root'}, "
-                  f"sensor={np.round(origin,4)}", flush=True)
+                  f"kind={item['kind']}, sensor={np.round(origin,4)}", flush=True)
             mask, seg_seconds, _ = ground_mask(args.full_las, origin, matrix,
                                                 args.chunk_size, args.min_range, args.zone0_sectors)
             count = int(np.count_nonzero(mask))
@@ -515,7 +441,7 @@ def main(args):
             accepted = enqueue(state, candidate_list, current_id, item["depth"],
                                "recursive_candidate", args)
             # NOTE: queued root origin stays at head until *after* this enqueue.
-            state["pending"].pop(pick)
+            state["pending"].pop(0)
             record = {
                 "id": current_id, "parent_id": parent_id, "depth": item["depth"],
                 "kind": item["kind"], "source_component": item.get("source_component", ""),
@@ -525,10 +451,6 @@ def main(args):
                 "candidates_enqueued": accepted, "segmentation_seconds": seg_seconds,
                 "elapsed_seconds": round(perf_counter() - t0, 3),
                 "ground_mask_file": str(mask_path.relative_to(out)).replace("\\", "/"),
-                "priority_at_selection": round(float(priority), 4) if np.isfinite(priority) else "root",
-                "area_m2_approx": item.get("area_m2_approx", ""),
-                "clearance_m_approx": item.get("clearance_m_approx", ""),
-                "stacking_proxy": item.get("stacking_proxy", ""),
             }
             state["processed"].append(record)
             state["next_id"] += 1
@@ -566,8 +488,7 @@ def cli():
     p.add_argument("--max-executions", type=int, default=64,
                    help="Max Patchwork++ executions per invocation (resume to continue)")
     p.add_argument("--resume", action="store_true")
-    p.add_argument("--expected-first-root-count", type=int, default=None,
-                   help="Optional exact Ground count for the first root; omit for other scenes")
+    p.add_argument("--expected-first-root-count", type=int, default=23028831)
     p.add_argument("--min-range", type=float, default=0.5)
     p.add_argument("--zone0-sectors", type=int, default=16)
     p.add_argument("--sensor-height", type=float, default=1.723)
@@ -579,11 +500,9 @@ def cli():
     p.add_argument("--min-area", type=float, default=10.0)
     p.add_argument("--clearance", type=float, default=1.0)
     p.add_argument("--max-stacking", type=float, default=3.0)
-    p.add_argument("--min-origin-distance", type=float, default=8.0, help="Minimum 3D ground-reference spacing (v2 default 8m)")
-    p.add_argument("--visited-xy-cell", type=float, default=8.0, help="Coarse XY origin-visitation cell size")
-    p.add_argument("--visited-z-cell", type=float, default=1.5, help="Coarse Z origin-visitation cell size")
+    p.add_argument("--min-origin-distance", type=float, default=4.0, help="Minimum 3D ground-reference spacing")
     p.add_argument("--max-seeds-per-patch", type=int, default=3)
-    p.add_argument("--max-candidates-per-result", type=int, default=6)
+    p.add_argument("--max-candidates-per-result", type=int, default=12)
     p.add_argument("--max-voxels", type=int, default=8_000_000)
     p.add_argument("--save-novel-every", type=int, default=0,
                    help="Keep new-only LAS on every Nth origin; 0 saves none (avoid disk exhaustion)")
@@ -594,7 +513,7 @@ def cli():
             args.xy_cell <= 0 or args.z_cell <= 0 or args.min_voxel_points < 1 or
             not 1 <= args.min_xy_support <= 9 or args.min_area <= 0 or
             args.clearance < 0 or args.max_stacking < 1 or
-            args.min_origin_distance <= 0 or args.visited_xy_cell <= 0 or args.visited_z_cell <= 0 or args.max_seeds_per_patch < 1 or
+            args.min_origin_distance <= 0 or args.max_seeds_per_patch < 1 or
             args.max_candidates_per_result < 1 or args.max_voxels < 1 or
             args.save_novel_every < 0 or args.save_ground_every < 0 or args.min_range <= 0 or args.sensor_height <= 0 or
             args.zone0_sectors < 1):
